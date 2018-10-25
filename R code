@@ -1,0 +1,187 @@
+version: 2
+jobs:
+  build:
+    docker:
+      - image: circleci/ruby:2.4.1
+    steps:
+      - checkout
+      - run:
+      
+library(survival)
+library(KMsurv)
+library(MASS)
+data(larynx)
+attach(larynx)
+
+samplek<-function(time,delta,type,weifun){
+
+# calculate d and y
+k<-length(unique(type))
+fit<-survfit(Surv(time, delta)~type)
+fit1<-survfit(Surv(time, delta)~1)
+combine<-cbind(time=summary(fit1)$time, risk=summary(fit1)$n.risk, event=summary(fit1)$n.event)
+
+temp<-cbind(strata=summary(fit)$strata, time=summary(fit)$time, risk=summary(fit)$n.risk, event=summary(fit)$n.event)
+whole<-1:length(summary(fit1)$time)
+all<-matrix(rep(0,length(summary(fit1)$time)*(2*k+3)), ncol=(2*k+3))
+timepoint=length(summary(fit1)$time)
+all[,c(1,(2+2*k),(3+2*k))]<-combine
+for (m in 1:k){
+set=subset(temp,temp[,"strata"]==m)
+von<-numeric()
+for(i in 1: nrow(set)){
+     von[i]<-which(summary(fit1)$time==set[,2][i])
+    }
+all[von, c((2*m):(2*m+1))]<-set[,c(3,4)]
+}
+all
+
+#correction on the column for risk set
+obs<-numeric()
+newdata<-cbind(type,time,delta)
+for(m in 1:k){
+obs[m]<-nrow(subset(newdata,newdata[,1]==m))
+}
+a=max(obs)
+temp=matrix(rep(0,k*a),ncol=k)
+for (m in 1:k){
+for (n in 1:(obs[m])){
+set=subset(newdata,newdata[,1]==m)
+temp[n,m]=set[n,2]
+}
+}
+
+for(n in 1:k){
+death<-numeric()
+for(i in 1:length(whole)){
+for(j in 1:obs[n]){
+death[j]=(as.numeric(summary(fit1)$time[i]>temp[j,n]))
+}
+all[i,2*n]<-obs[n]-sum(death)
+}
+}
+all
+# caculate z and variance covariance at each time point
+s<-nrow(all)
+z<-matrix(0,nrow=s,ncol=k-1)
+v<-matrix(0,nrow=s,ncol=k-1)
+for(j in 1:(k-1)){
+for(i in 1:s){
+z[i,j]<-all[i,2*j+1]-all[i,2*j]*all[i,(k+1)*2+1]/all[i,(k+1)*2]
+v[i,j]<-all[i,2*j]/all[i,(k+1)*2]*(1-all[i,2*j]/all[i,(k+1)*2])*(all[i,(k+1)*2]-all[i,(k+1)*2+1])/(all[i,(k+1)*2]-1)*all[i,(k+1)*2+1]
+}
+}
+z
+v
+
+co<-matrix(0,nrow=s,ncol=(k-2)*(k-1)/2)
+for(p in 1:s){
+q=1
+for(nn in 1:(k-1)){
+for(mm in 1:(k-1)){
+if(nn<mm){
+co[p,q]<--all[p,2*nn]/all[p,(k+1)*2]*(all[p,2*mm]/all[p,(k+1)*2])*(all[p,(k+1)*2]-all[p,(k+1)*2+1])/(all[p,(k+1)*2]-1)*all[p,(k+1)*2+1]
+q<- q+1
+}}}}
+
+
+
+# test with different weight
+if (weifun=="logrank") weight<-rep(1,nrow(all))
+ if (weifun=="Gehan") weight<-all[,(k+1)*2]
+ if (weifun=="Tarone-Ware") weight<-(all[,(2*k+2)])^0.5
+ if (weifun=="Peto") weight<-cumprod(1-all[,(2*k+3)]/(all[,(2*k+2)]+1))
+ if (weifun=="MPeto") weight<-(cumprod(1-all[,(2*k+3)]/(all[,(2*k+2)]+1)))*all[,(2*k+2)]/(all[,(2*k+2)]+1)
+ if (weifun=="FH1")  weight<-c(0,1-summary(fit1)$surv[-length(summary(fit1)$surv)])
+ if (weifun=="FH2")   weight<-c(1,summary(fit1)$surv[-length(summary(fit1)$surv)])
+ if (weifun=="FH3")   weight<-(c(0,1-summary(fit1)$surv[-length(summary(fit1)$surv)]))*(c(1,summary(fit1)$surv[-length(summary(fit1)$surv)]))
+ if (weifun=="FH4")    weight<-(c(0,1-summary(fit1)$surv[-length(summary(fit1)$surv)]))^(0.5)*(c(1,summary(fit1)$surv[-length(summary(fit1)$surv)]))^(0.5)
+ if (weifun=="FH5")   weight<-(c(0,1-summary(fit1)$surv[-length(summary(fit1)$surv)]))^(2)*(c(1,summary(fit1)$surv[-length(summary(fit1)$surv)]))^(0.5)
+
+# calculate test statistic
+zx<-matrix(0,nrow=(k-1))
+for(x in 1:(k-1)){
+zx[x]<-sum(weight*z[,x])}
+zx
+
+cx<-matrix(0,nrow=(k-1),ncol=(k-1))
+for(i in 1:(k-1)){
+for(a in 1:s)
+cx[i,i]<-sum(weight^2*v[,i])
+}
+w<-1
+for(ii in 1:(k-1)){
+for(jj in 1:(k-1)){
+if(ii<jj){
+cx[ii,jj]<-sum(weight^2*co[,w])
+cx[jj,ii]<-sum(weight^2*co[,w])
+w<-w+1}
+}
+}
+cx
+x2<-t(zx)%*%ginv(cx)%*%zx
+x2
+p_value<-1-pchisq(x2,(k-1))
+
+#trend test
+s<-nrow(all)
+z1<-matrix(0,nrow=s,ncol=k)
+v1<-matrix(0,nrow=s,ncol=k)
+for(j in 1:k){
+for(i in 1:s){
+z1[i,j]<-all[i,2*j+1]-all[i,2*j]*all[i,(k+1)*2+1]/all[i,(k+1)*2]
+v1[i,j]<-all[i,2*j]/all[i,(k+1)*2]*(1-all[i,2*j]/all[i,(k+1)*2])*(all[i,(k+1)*2]-all[i,(k+1)*2+1])/(all[i,(k+1)*2]-1)*all[i,(k+1)*2+1]
+}
+}
+z1
+v1
+
+co1<-matrix(0,nrow=s,ncol=(k-1)*k/2)
+for(p in 1:s){
+q=1
+for(nn in 1:k){
+for(mm in 1:k){
+if(nn<mm){
+co1[p,q]<--all[p,2*nn]/all[p,(k+1)*2]*(all[p,2*mm]/all[p,(k+1)*2])*(all[p,(k+1)*2]-all[p,(k+1)*2+1])/(all[p,(k+1)*2]-1)*all[p,(k+1)*2+1]
+q<- q+1
+}}}}
+zx1<-matrix(0,ncol=k)
+for(x in 1:k){
+zx1[x]<-sum(weight*z1[,x])}
+zx1
+
+cx1<-matrix(0,nrow=k,ncol=k)
+for(i in 1:k){
+for(a in 1:s)
+cx1[i,i]<-sum(weight^2*v1[,i])
+}
+w<-1
+for(ii in 1:k){
+for(jj in 1:k){
+if(ii<jj){
+cx1[ii,jj]<-sum(weight^2*co1[,w])
+cx1[jj,ii]<-sum(weight^2*co1[,w])
+w<-w+1}
+}
+}
+b<-matrix(c(1:k),nrow=1)
+trendch<-sum(zx1*b)/(sqrt(b%*%cx1%*%t(b)))
+trendp<-1-pnorm(trendch)
+list(test=x2,p_value=p_value,trendt=trendch,trendp=trendp)
+
+}
+result<-samplek(larynx$time,larynx$delta,larynx$stage,weifun="logrank")
+result
+
+# using in different dataset
+data(kidney)
+attach(kidney)
+samplek(kidney$time,kidney$delta,kidney$type,weifun="logrank")
+
+data(bmt)
+attach(bmt)
+samplek(bmt$t2,bmt$d3,bmt$group,weifun="Gehan")
+
+data(alloauto)
+attach(alloauto)
+samplek(alloauto$time,alloauto$delta,alloauto$type,weifun="logrank")
