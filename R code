@@ -1,6 +1,4 @@
-
-      
-library(survival)
+  library(survival)
 library(KMsurv)
 library(MASS)
 data(larynx)
